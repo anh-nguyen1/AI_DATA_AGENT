@@ -85,7 +85,7 @@ while True:
         prompt = f"""
             You are an expert Data Engineer specializing in Snowflake. Your job is to convert the user's natural language question into a valid Snowflake SQL query.
             
-            Here is the dynamic database schema layout provided directly from Snowflake metadata (Database: {db_name}, Schema: {schema_name}):
+            Here is the dynamic database schema layout provided directly from Snowflake metadata (Database: {SF_DATABASE}, Schema: {SF_SCHEMA}):
             {db_structure}
 
             {history_context}
@@ -94,7 +94,7 @@ while True:
             1. Return ONLY the raw SQL code string. Do NOT wrap it in markdown block formatting like ```sql or ```.
             2. Do NOT include any conversational text, explanations, intro, or outro.
             3. Even if the user asks in Vietnamese or format their question informally, you must ONLY output the final executable SQL statement.
-            4. Always use fully qualified table paths in the query (e.g., {db_name}.{schema_name}.TABLE_NAME) to guarantee execution success.
+            4. Always use fully qualified table paths in the query (e.g., {SF_DATABASE}.{SF_SCHEMA}.TABLE_NAME) to guarantee execution success.
             5. IMPORTANT FOR FOLLOW-UP QUESTIONS: if the user asks a follow-up question referencing previous data, schema, combine, join, or modify the previous SQL logic if applicable.
             
             STRICT ANTI-HALLUCINATION GUARDRAILS:
