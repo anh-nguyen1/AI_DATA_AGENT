@@ -49,6 +49,7 @@ st.caption("Ask questions in plain English or Vietnamese, and the AI will fetch 
 if st.sidebar.button("🗑️ Clear Chat Context"):
     st.session_state.chat_history = []
     st.sidebar.success("Chat history cleared!")
+    st.run()
 
 # Text input for user query
 user_question = st.text_input("💬 Ask your database:", placeholder="e.g., Show me the top 3 orders with the highest total price")
@@ -161,4 +162,3 @@ if user_question:
             with st.chat_message("assistant"):
                 st.code(chat["sql"], language="sql")
 
-    #streamlit run app.py on terminal
