@@ -147,5 +147,18 @@ if user_question:
                 
         except Exception as e:
             st.error(f"An error occurred: {e}")
+    
+    #Print chat history on the screen
+    if st.session_state.chat_history:
+        st.markdown("---")
+        st.subheader("📜 Conversation History")
+
+        for idx, chat in enumerate(reversed(st.session_state.chat_history)):
+            #use streamlit native chat bubble style
+            with st.chat_message("user"):
+                st.write(chat["user"])
+            #display SQL generated statement
+            with st.chat_message("assistant"):
+                st.code(chat["sql"], language="sql")
 
     #streamlit run app.py on terminal
