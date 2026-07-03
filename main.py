@@ -45,18 +45,47 @@ while True:
     if not user_question.strip():
         continue
 
-    # Define strict prompt rules for Gemini text-to-sql generation
-    prompt = f"""
-    You are an expert Data Engineer. Your job is to convert the user's natural language question into a valid Snowflake SQL query.
-    The target table is called 'CUSTOMER' and it contains columns like 'C_NAME', 'C_MKTSEGMENT', 'C_PHONE', 'C_ACCTBAL', 'C_ADDRESS'.
-    
-    CRITICAL RULE: Return ONLY the raw SQL code string. Do NOT wrap it in markdown block formatting like ```sql.
-    
-    User Question: {user_question}
-    """
-
     try:
-        print("Gemini is thinking & generating SQL...")
+        print("🔍 Fetching database layout from Snowflake...")
+        
+        # 1. Dynamically retrieve database schema layout from Snowflake INFORMATION_SCHEMA
+        cs.execute(f"""
+            SELECT table_name, column_name 
+            FROM {SF_DATABASE}.INFORMATION_SCHEMA.COLUMNS 
+            WHERE table_schema = '{SF_SCHEMA}'
+            ORDER BY table_name, ordinal_position;
+        """)
+        metadata_results = cs.fetchall()
+        
+        # Format raw database metadata into a structured list string
+        db_structure = ""
+        current_table = ""
+        for row in metadata_results:
+            table_name, column_name = row[0], row[1]
+            if table_name != current_table:
+                db_structure += f"\n- Table '{table_name}' has columns: "
+                current_table = table_name
+            db_structure += f"'{column_name}', "
+
+        print("🤔 Gemini is thinking & generating SQL...")
+        
+        # 2. Construct dynamic prompt embedding the retrieved db_structure for Gemini
+        prompt = f"""
+        You are an expert Data Engineer specializing in Snowflake. Your job is to convert the user's natural language question into a valid Snowflake SQL query.
+        
+        Here is the dynamic database schema layout provided directly from Snowflake metadata (Database: {SF_DATABASE}, Schema: {SF_SCHEMA}):
+        {db_structure}
+        
+        CRITICAL RULES:
+        1. Return ONLY the raw SQL code string. Do NOT wrap it in markdown block formatting like ```sql or ```.
+        2. Do NOT include any conversational text, explanations, intro, or outro.
+        3. Even if the user asks in Vietnamese or format their question informally, you must ONLY output the final executable SQL statement.
+        4. Always use fully qualified table paths in the query (e.g., {SF_DATABASE}.{SF_SCHEMA}.TABLE_NAME) to guarantee execution success.
+        
+        User Question: {user_question}
+        """
+
+        # 3. Request Gemini to generate the executable SQL query
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
@@ -65,18 +94,20 @@ while True:
         generated_sql = response.text.strip()
         print(f"Generated SQL:\n[ {generated_sql} ]")
         
+        # 4. Execute the generated SQL statement on Snowflake
         print("Executing on Snowflake...")
         cs.execute(generated_sql)
         
-        # NEW: Dynamically fetch column names from the SQL cursor description
+        # Dynamically fetch column names from the SQL cursor description
         columns = [col[0] for col in cs.description]
         results = cs.fetchall()
         
+        # 5. Print out the structured results table onto the Terminal screen
         print("\n--- Final Results from Snowflake ---")
         if not results:
             print("No data found for this query.")
         else:
-            # Print headers nicely
+            # Print headers nicely with custom separators
             print(" | ".join(columns))
             print("-" * (len(" | ".join(columns)) + 4))
             # Print row results dynamically based on what columns the AI selected
@@ -84,7 +115,7 @@ while True:
                 print(" | ".join(str(item) for item in row))
 
     except Exception as e:
-        print(f" An error occurred: {e}")
+        print(f"❌ An error occurred: {e}")
 
 # Clean up and close connections safely after exiting the loop
 cs.close()
