@@ -71,19 +71,23 @@ while True:
         
         # 2. Construct dynamic prompt embedding the retrieved db_structure for Gemini
         prompt = f"""
-        You are an expert Data Engineer specializing in Snowflake. Your job is to convert the user's natural language question into a valid Snowflake SQL query.
-        
-        Here is the dynamic database schema layout provided directly from Snowflake metadata (Database: {SF_DATABASE}, Schema: {SF_SCHEMA}):
-        {db_structure}
-        
-        CRITICAL RULES:
-        1. Return ONLY the raw SQL code string. Do NOT wrap it in markdown block formatting like ```sql or ```.
-        2. Do NOT include any conversational text, explanations, intro, or outro.
-        3. Even if the user asks in Vietnamese or format their question informally, you must ONLY output the final executable SQL statement.
-        4. Always use fully qualified table paths in the query (e.g., {SF_DATABASE}.{SF_SCHEMA}.TABLE_NAME) to guarantee execution success.
-        
-        User Question: {user_question}
-        """
+            You are an expert Data Engineer specializing in Snowflake. Your job is to convert the user's natural language question into a valid Snowflake SQL query.
+            
+            Here is the dynamic database schema layout provided directly from Snowflake metadata (Database: {db_name}, Schema: {schema_name}):
+            {db_structure}
+            
+            CRITICAL RULES:
+            1. Return ONLY the raw SQL code string. Do NOT wrap it in markdown block formatting like ```sql or ```.
+            2. Do NOT include any conversational text, explanations, intro, or outro.
+            3. Even if the user asks in Vietnamese or format their question informally, you must ONLY output the final executable SQL statement.
+            4. Always use fully qualified table paths in the query (e.g., {db_name}.{schema_name}.TABLE_NAME) to guarantee execution success.
+            
+            STRICT ANTI-HALLUCINATION GUARDRAILS:
+            5. If the user asks for information, columns, or concepts that DO NOT exist in the provided schema (e.g., SSN, email, etc.), you MUST NOT fake, guess, or map them to unrelated columns (like mapping SSN to ID, or Email to Phone). In this case, strictly return exactly this string: "ERROR: Requested data does not exist in the schema."
+            6. If the user's question is ambiguous (e.g., "highest amount of money" without specifying account balance or order total), prioritize the most logical column in the customer context (e.g., C_ACCTBAL) but do not invent new column names.
+            
+            User Question: {user_question}
+            """
 
         # 3. Request Gemini to generate the executable SQL query
         response = ai_client.models.generate_content(

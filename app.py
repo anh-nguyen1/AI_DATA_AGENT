@@ -83,6 +83,10 @@ if user_question:
             3. Even if the user asks in Vietnamese or format their question informally, you must ONLY output the final executable SQL statement.
             4. Always use fully qualified table paths in the query (e.g., {db_name}.{schema_name}.TABLE_NAME) to guarantee execution success.
             
+            STRICT ANTI-HALLUCINATION GUARDRAILS:
+            5. If the user asks for information, columns, or concepts that DO NOT exist in the provided schema (e.g., SSN, email, etc.), you MUST NOT fake, guess, or map them to unrelated columns (like mapping SSN to ID, or Email to Phone). In this case, strictly return exactly this string: "ERROR: Requested data does not exist in the schema."
+            6. If the user's question is ambiguous (e.g., "highest amount of money" without specifying account balance or order total), prioritize the most logical column in the customer context (e.g., C_ACCTBAL) but do not invent new column names.
+            
             User Question: {user_question}
             """
             
