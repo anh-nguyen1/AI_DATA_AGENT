@@ -1,4 +1,3 @@
-
 import os
 import snowflake.connector
 import streamlit as st
@@ -37,9 +36,19 @@ except Exception as e:
     st.error(f"Failed to connect to databases/AI: {e}")
     st.stop()
 
+# --- INITIALIZE CHAT HISTORY IN SESSION STATE ---
+# Streamlit runs linearly on user actions; session_state ensures memory persistence across runs
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
 # --- WEB UI INTERFACE ---
 st.title("🤖 Snowflake AI Data Agent")
 st.caption("Ask questions in plain English or Vietnamese, and the AI will fetch data dynamically from Snowflake!")
+
+# Button to manually wipe conversation history memory
+if st.sidebar.button("🗑️ Clear Chat Context"):
+    st.session_state.chat_history = []
+    st.sidebar.success("Chat history cleared!")
 
 # Text input for user query
 user_question = st.text_input("💬 Ask your database:", placeholder="e.g., Show me the top 3 orders with the highest total price")
@@ -70,22 +79,33 @@ if user_question:
                     current_table = table_name
                 db_structure += f"'{column_name}', "
             
-            # 2. Construct dynamic prompt embedding the retrieved db_structure for Gemini
+            # --- CONSTRUCT CHAT HISTORY CONTEXT ---
+            # Compile past conversational history strings to supply contextual references for Gemini
+            history_context = ""
+            if st.session_state.chat_history:
+                history_context = "\nHere is the ongoing conversation history for context:\n"
+                for chat in st.session_state.chat_history:
+                    history_context += f"User: {chat['user']}\nAI Generated SQL: {chat['sql']}\n"
+
+            # 2. Construct dynamic prompt embedding the retrieved db_structure and contextual history
             prompt = f"""
             You are an expert Data Engineer specializing in Snowflake. Your job is to convert the user's natural language question into a valid Snowflake SQL query.
             
             Here is the dynamic database schema layout provided directly from Snowflake metadata (Database: {db_name}, Schema: {schema_name}):
             {db_structure}
             
+            {history_context}
+            
             CRITICAL RULES:
             1. Return ONLY the raw SQL code string. Do NOT wrap it in markdown block formatting like ```sql or ```.
             2. Do NOT include any conversational text, explanations, intro, or outro.
             3. Even if the user asks in Vietnamese or format their question informally, you must ONLY output the final executable SQL statement.
             4. Always use fully qualified table paths in the query (e.g., {db_name}.{schema_name}.TABLE_NAME) to guarantee execution success.
+            5. IMPORTANT FOR FOLLOW-UP QUESTIONS: If the user asks a follow-up question referencing previous data, schema, combine, join, or modify the previous SQL logic if applicable.
             
             STRICT ANTI-HALLUCINATION GUARDRAILS:
-            5. If the user asks for information, columns, or concepts that DO NOT exist in the provided schema (e.g., SSN, email, etc.), you MUST NOT fake, guess, or map them to unrelated columns (like mapping SSN to ID, or Email to Phone). In this case, strictly return exactly this string: "ERROR: Requested data does not exist in the schema."
-            6. If the user's question is ambiguous (e.g., "highest amount of money" without specifying account balance or order total), prioritize the most logical column in the customer context (e.g., C_ACCTBAL) but do not invent new column names.
+            6. If the user asks for information, columns, or concepts that DO NOT exist in the provided schema (e.g., SSN, email, etc.), you MUST NOT fake, guess, or map them to unrelated columns (like mapping SSN to ID, or Email to Phone). In this case, strictly return exactly this string: "ERROR: Requested data does not exist in the schema."
+            7. If the user's question is ambiguous (e.g., "highest amount of money" without specifying account balance or order total), prioritize the most logical column in the customer context (e.g., C_ACCTBAL) but do not invent new column names.
             
             User Question: {user_question}
             """
@@ -93,6 +113,12 @@ if user_question:
             # 3. Request Gemini to generate the executable SQL query
             response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
             generated_sql = response.text.strip()
+            
+            # --- ANTI-HALLUCINATION GUARDRAIL CHECK ---
+            # Break pipeline early if conversational text triggers the predefined guardrail error phrase
+            if "ERROR: Requested data does not exist in the schema." in generated_sql:
+                st.error("⚠️ Requested data components or concepts do not exist in the database schema.")
+                st.stop()
             
             # Display the generated SQL statement inside an interactive expander
             with st.expander("👉 View Generated SQL Code"):
@@ -111,6 +137,13 @@ if user_question:
             else:
                 df = pd.DataFrame(query_results, columns=columns)
                 st.dataframe(df, use_container_width=True)
+                
+                # --- SAVE SUCCESSFUL INTERACTION TO CHAT HISTORY ---
+                # Only commit to memory if execution completes cleanly without runtime errors
+                st.session_state.chat_history.append({
+                    "user": user_question,
+                    "sql": generated_sql
+                })
                 
         except Exception as e:
             st.error(f"An error occurred: {e}")

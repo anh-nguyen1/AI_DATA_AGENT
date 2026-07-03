@@ -31,6 +31,9 @@ print("🤖 AI DATA AGENT IS READY TO CHAT WITH YOUR SNOWFLAKE!")
 print("Type your question below. (Type 'exit' or 'quit' to stop)")
 print("========================================================")
 
+#show chat history
+chat_history = []
+
 # Start an infinite loop to allow continuous typing in Terminal
 while True:
     print("\n--------------------------------------------------------")
@@ -70,17 +73,29 @@ while True:
         print("🤔 Gemini is thinking & generating SQL...")
         
         # 2. Construct dynamic prompt embedding the retrieved db_structure for Gemini
+        
+        history_context = ""
+        if chat_history:
+            history_context = "\nHere is the ongoing conversation history for context:\n"
+            for chat in chat_history:
+                history_context += f"User: {chat['user']}\nAI Generated SQL: {chat['sql']}\n"
+
+        print("🤔 Gemini is thinking & generating SQL...")
+        
         prompt = f"""
             You are an expert Data Engineer specializing in Snowflake. Your job is to convert the user's natural language question into a valid Snowflake SQL query.
             
             Here is the dynamic database schema layout provided directly from Snowflake metadata (Database: {db_name}, Schema: {schema_name}):
             {db_structure}
+
+            {history_context}
             
             CRITICAL RULES:
             1. Return ONLY the raw SQL code string. Do NOT wrap it in markdown block formatting like ```sql or ```.
             2. Do NOT include any conversational text, explanations, intro, or outro.
             3. Even if the user asks in Vietnamese or format their question informally, you must ONLY output the final executable SQL statement.
             4. Always use fully qualified table paths in the query (e.g., {db_name}.{schema_name}.TABLE_NAME) to guarantee execution success.
+            5. IMPORTANT FOR FOLLOW-UP QUESTIONS: if the user asks a follow-up question referencing previous data, schema, combine, join, or modify the previous SQL logic if applicable.
             
             STRICT ANTI-HALLUCINATION GUARDRAILS:
             5. If the user asks for information, columns, or concepts that DO NOT exist in the provided schema (e.g., SSN, email, etc.), you MUST NOT fake, guess, or map them to unrelated columns (like mapping SSN to ID, or Email to Phone). In this case, strictly return exactly this string: "ERROR: Requested data does not exist in the schema."
@@ -117,6 +132,11 @@ while True:
             # Print row results dynamically based on what columns the AI selected
             for row in results:
                 print(" | ".join(str(item) for item in row))
+
+        chat_history.append({
+            "user": user_question,
+            "sql" : generated_sql
+        })
 
     except Exception as e:
         print(f"❌ An error occurred: {e}")
