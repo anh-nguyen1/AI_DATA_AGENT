@@ -89,7 +89,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("🔒 **Security Mode:** Guardrails Active\n⚡ **Caching:** Enabled")
-    
+
 #Main UI interface
 st.title("🤖 Snowflake AI Data Agent")
 st.caption("Ask questions in plain English or Vietnamese, and the AI will fetch data dynamically from Snowflake!")
@@ -100,37 +100,18 @@ user_question = st.text_input("💬 Ask your database:", placeholder="e.g., Show
 if user_question:
     with st.spinner("🔍 Fetching database layout & thinking..."):
         try:
-            # 1. Dynamically retrieve database schema layout from Snowflake INFORMATION_SCHEMA
-            cs = ctx.cursor()
             db_name = os.getenv('SNOWFLAKE_DATABASE')
             schema_name = os.getenv('SNOWFLAKE_SCHEMA')
+            #Limits input history token count and keeps context window clean for Gemini AI
+            limited_history = st.session_state.chat_history[-10] if st.session_state.chat_history else []
             
-            cs.execute(f"""
-                SELECT table_name, column_name 
-                FROM {db_name}.INFORMATION_SCHEMA.COLUMNS 
-                WHERE table_schema = '{schema_name}'
-                ORDER BY table_name, ordinal_position;
-            """)
-            metadata_results = cs.fetchall()
-            
-            # Format raw database metadata into a structured list string
-            db_structure = ""
-            current_table = ""
-            for row in metadata_results:
-                table_name, column_name = row[0], row[1]
-                if table_name != current_table:
-                    db_structure += f"\n- Table '{table_name}' has columns: "
-                    current_table = table_name
-                db_structure += f"'{column_name}', "
-            
-            # --- CONSTRUCT CHAT HISTORY CONTEXT ---
             # Compile past conversational history strings to supply contextual references for Gemini
             history_context = ""
-            if st.session_state.chat_history:
-                history_context = "\nHere is the ongoing conversation history for context:\n"
-                for chat in st.session_state.chat_history:
+            if limited_history:
+                history_context = "\nHere is the ongoing conversation history for context (Max 10 turns):\n"
+                for chat in limited_history:
                     history_context += f"User: {chat['user']}\nAI Generated SQL: {chat['sql']}\n"
-
+     
             # 2. Construct dynamic prompt embedding the retrieved db_structure and contextual history
             prompt = f"""
             You are an expert Data Engineer specializing in Snowflake. Your job is to convert the user's natural language question into a valid Snowflake SQL query.
@@ -143,9 +124,9 @@ if user_question:
             CRITICAL RULES:
             1. Return ONLY the raw SQL code string. Do NOT wrap it in markdown block formatting like ```sql or ```.
             2. Do NOT include any conversational text, explanations, intro, or outro.
-            3. Even if the user asks in Vietnamese or format their question informally, you must ONLY output the final executable SQL statement.
-            4. Always use fully qualified table paths in the query (e.g., {db_name}.{schema_name}.TABLE_NAME) to guarantee execution success.
-            5. IMPORTANT FOR FOLLOW-UP QUESTIONS: If the user asks a follow-up question referencing previous data, schema, combine, join, or modify the previous SQL logic if applicable.
+            3. Always use fully qualified table paths in the query (e.g., {db_name}.{schema_name}.TABLE_NAME) to guarantee execution success.
+            4. IMPORTANT FOR FOLLOW-UP QUESTIONS: If the user asks a follow-up question referencing previous data, schema, combine, join, or modify the previous SQL logic if applicable.
+            5. If the user asks to list all data, dump a table, or if the query could potentially return massive rows, you MUST FORCEFULLY APPEND A 'LIMIT 1000' clause at the end of the SQL query. NEVER allow a query to fetch millions of records unfiltered.
             
             STRICT ANTI-HALLUCINATION GUARDRAILS:
             6. If the user asks for information, columns, or concepts that DO NOT exist in the provided schema (e.g., SSN, email, etc.), you MUST NOT fake, guess, or map them to unrelated columns (like mapping SSN to ID, or Email to Phone). In this case, strictly return exactly this string: "ERROR: Requested data does not exist in the schema."
@@ -157,6 +138,11 @@ if user_question:
             # 3. Request Gemini to generate the executable SQL query
             response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
             generated_sql = response.text.strip()
+
+            # Hardcoded python fallback safety check to inject LIMIT if the AI fails to follow instructions
+            if "LIMIT" not in generated_sql.upper() and "SELECT" in generated_sql.upper():
+                if "COUNT(" not in generated_sql.upper():
+                    generated_sql = generated_sql.rstrip(';') + " LIMIT 1000;"
             
             # --- ANTI-HALLUCINATION GUARDRAIL CHECK ---
             # Break pipeline early if conversational text triggers the predefined guardrail error phrase
@@ -169,6 +155,7 @@ if user_question:
                 st.code(generated_sql, language="sql")
             
             # 4. Execute the generated SQL statement on Snowflake
+            cs = ctx.cursor()
             cs.execute(generated_sql)
             columns = [col[0] for col in cs.description]
             query_results = cs.fetchall()
@@ -178,15 +165,31 @@ if user_question:
             st.success("⚡ Data fetched successfully!")
             if not query_results:
                 st.warning("No records found.")
+                current_insight = "No records were returned from the database for this specific query."
+                df_summary = None
             else:
                 df = pd.DataFrame(query_results, columns=columns)
                 st.dataframe(df, use_container_width=True)
-                
-                # --- SAVE SUCCESSFUL INTERACTION TO CHAT HISTORY ---
-                # Only commit to memory if execution completes cleanly without runtime errors
+                # Extract sample rows as metadata for insight prompt
+                df_summary = df.head(5).to_string() 
+
+                with st.spinner("🤖 Generating data insights..."):
+                    insight_prompt = f"""
+                    You are a professional business data analyst. Based on the user's question: '{user_question}' 
+                    and the actual data results returned from the database (showing a preview of the data):
+                    {df_summary}
+                    
+                    Provide a concise summary or business explanation of the result in plain English or Vietnamese (matching the user's input language). 
+                    Keep it under 3 sentences. Do not mention technical terms like SQL, dataframe, rows, or database.
+                    """
+                    insight_response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=insight_prompt)
+                    current_insight = insight_response.text.strip()
+                    st.info(f"💡 **AI Insight:** {current_insight}")
+
                 st.session_state.chat_history.append({
                     "user": user_question,
-                    "sql": generated_sql
+                    "sql": generated_sql,
+                    "insight": current_insight
                 })
                 
         except Exception as e:
