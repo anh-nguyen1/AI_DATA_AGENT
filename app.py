@@ -75,14 +75,24 @@ except Exception as e:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
+with st.sidebar:
+    st.image("https://img.icons8.com/clouds/200/snowflake.png", width=100)
+    st.markdown("### 🛠️ Agent Control Panel")
+    #Display the current size pf tyhe sliding history window
+    history_len = len(st.session_state.chat_history)
+    st.metric(label="Context Buffer Size", value=f"{history_len}/10")
+
+    if st.button("🗑️ Clear Chat Context", use_container_width=True):
+        st.session_state.chat_history = []
+        st.success("Chat History cleared!")
+        st.rern()
+    
+    st.markdown("---")
+    st.markdown("🔒 **Security Mode:** Guardrails Active\n⚡ **Caching:** Enabled")
+    
+#Main UI interface
 st.title("🤖 Snowflake AI Data Agent")
 st.caption("Ask questions in plain English or Vietnamese, and the AI will fetch data dynamically from Snowflake!")
-
-# Button to manually wipe conversation history memory
-if st.sidebar.button("🗑️ Clear Chat Context"):
-    st.session_state.chat_history = []
-    st.sidebar.success("Chat history cleared!")
-    st.rerun()
 
 # Text input for user query
 user_question = st.text_input("💬 Ask your database:", placeholder="e.g., Show me the top 3 orders with the highest total price")
