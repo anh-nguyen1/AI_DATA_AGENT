@@ -201,10 +201,10 @@ if user_question:
         st.subheader("📜 Conversation History")
 
         for idx, chat in enumerate(reversed(st.session_state.chat_history)):
-            #use streamlit native chat bubble style
             with st.chat_message("user"):
                 st.write(chat["user"])
-            #display SQL generated statement
-            with st.chat_message("assistant"):
-                st.code(chat["sql"], language="sql")
+            with st.chat_message("assistant", avatar="🤖"):
+                st.markdown(f"**Explanation:** {chat['insight']}")
+                with st.expander("Show Generated SQL"):
+                    st.code(chat["sql"], language="sql")
 
