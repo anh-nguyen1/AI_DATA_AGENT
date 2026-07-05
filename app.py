@@ -5,42 +5,51 @@ from dotenv import load_dotenv
 from google import genai
 import pandas as pd
 
-# Setup page config for Streamlit
-st.set_page_config(page_title="Snowflake AI Data Agent", page_icon="🤖", layout="wide")
+# Setup page config for Streamlit - Modern UI layout
+st.set_page_config(
+    page_title="Snowflake AI Data Agent", 
+    page_icon="🤖", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # Load environment variables from the .env file
 load_dotenv()
 
-# Initialize the Gemini AI client using the API Key stored safely in .env
+# --- DRY & CONFIGURATION IMPROVEMENT: CENTRALIZED ENVIRONMENT ENVIRONMENT VARIABLES ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", 3600))
+MAX_LIMIT = int(os.getenv("MAX_QUERY_LIMIT", 1000))
+
+# Centralized Snowflake dictionary configuration
+SNOWFLAKE_CONFIG = {
+    "user": os.getenv('SNOWFLAKE_USER'),
+    "password": os.getenv('SNOWFLAKE_PASSWORD'),
+    "account": os.getenv('SNOWFLAKE_ACCOUNT'),
+    "warehouse": os.getenv('SNOWFLAKE_WAREHOUSE'),
+    "database": os.getenv('SNOWFLAKE_DATABASE'),
+    "schema": os.getenv('SNOWFLAKE_SCHEMA')
+}
+
+# Initialize the Gemini AI client
 @st.cache_resource
 def get_ai_client():
-    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    return genai.Client(api_key=GEMINI_API_KEY)
 
-# Establish a connection to the Snowflake database
+# Establish a connection to the Snowflake database using unpacked dict values
 @st.cache_resource
 def get_snowflake_connection():
-    return snowflake.connector.connect(
-        user=os.getenv('SNOWFLAKE_USER'),
-        password=os.getenv('SNOWFLAKE_PASSWORD'),
-        account=os.getenv('SNOWFLAKE_ACCOUNT'),
-        warehouse=os.getenv('SNOWFLAKE_WAREHOUSE'),
-        database=os.getenv('SNOWFLAKE_DATABASE'),
-        schema=os.getenv('SNOWFLAKE_SCHEMA')
-    )
-#cache schema to prevent repetitive disk queries and speed up performance
-@st.cache_data(ttl=3600) 
+    return snowflake.connector.connect(**SNOWFLAKE_CONFIG)
+
+# --- CACHE SCHEMA TO PREVENT REPETITIVE DISK QUERIES & SPEED UP PERFORMANCE ---
+@st.cache_data(ttl=CACHE_TTL) 
 def fetch_database_schema():
-    ctx_temp = snowflake.connector.connect(
-        user=os.getenv('SNOWFLAKE_USER'),
-        password=os.getenv('SNOWFLAKE_PASSWORD'),
-        account=os.getenv('SNOWFLAKE_ACCOUNT'),
-        warehouse=os.getenv('SNOWFLAKE_WAREHOUSE'),
-        database=os.getenv('SNOWFLAKE_DATABASE'),
-        schema=os.getenv('SNOWFLAKE_SCHEMA')
-    )
+    # Reuse the centralized configuration instead of repeating os.getenv
+    ctx_temp = snowflake.connector.connect(**SNOWFLAKE_CONFIG)
     cs = ctx_temp.cursor()
-    db_name = os.getenv('SNOWFLAKE_DATABASE')
-    schema_name = os.getenv('SNOWFLAKE_SCHEMA')
+    
+    db_name = SNOWFLAKE_CONFIG["database"]
+    schema_name = SNOWFLAKE_CONFIG["schema"]
 
     cs.execute(f"""
         SELECT table_name, column_name 
@@ -65,32 +74,35 @@ def fetch_database_schema():
 try:
     ai_client = get_ai_client()
     ctx = get_snowflake_connection()
-    #pre-load the schema infor into memory cache
+    # Pre-load the schema info into memory cache
     db_structure = fetch_database_schema()
 except Exception as e:
     st.error(f"Failed to connect to databases/AI: {e}")
     st.stop()
 
-# Streamlit runs linearly on user actions; session_state ensures memory persistence across runs
+# Initialize chat history in session state
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
+# --- SIDEBAR CONTROL PANEL UI ---
 with st.sidebar:
     st.image("https://img.icons8.com/clouds/200/snowflake.png", width=100)
     st.markdown("### 🛠️ Agent Control Panel")
-    #Display the current size pf tyhe sliding history window
+    
+    # Display the current size of the sliding history window
     history_len = len(st.session_state.chat_history)
     st.metric(label="Context Buffer Size", value=f"{history_len}/10")
 
+    # FIXED: Solved the syntax typo 'st.rern()' to 'st.rerun()'
     if st.button("🗑️ Clear Chat Context", use_container_width=True):
         st.session_state.chat_history = []
         st.success("Chat History cleared!")
-        st.rern()
+        st.rerun()
     
     st.markdown("---")
-    st.markdown("🔒 **Security Mode:** Guardrails Active\n⚡ **Caching:** Enabled")
+    st.markdown(f"🔒 **Security Mode:** Guardrails Active\n⚡ **Max Rows:** {MAX_LIMIT}\n⏱️ **Cache TTL:** {CACHE_TTL}s")
 
-#Main UI interface
+# Main UI interface
 st.title("🤖 Snowflake AI Data Agent")
 st.caption("Ask questions in plain English or Vietnamese, and the AI will fetch data dynamically from Snowflake!")
 
@@ -100,10 +112,11 @@ user_question = st.text_input("💬 Ask your database:", placeholder="e.g., Show
 if user_question:
     with st.spinner("🔍 Fetching database layout & thinking..."):
         try:
-            db_name = os.getenv('SNOWFLAKE_DATABASE')
-            schema_name = os.getenv('SNOWFLAKE_SCHEMA')
-            #Limits input history token count and keeps context window clean for Gemini AI
-            limited_history = st.session_state.chat_history[-10] if st.session_state.chat_history else []
+            db_name = SNOWFLAKE_CONFIG["database"]
+            schema_name = SNOWFLAKE_CONFIG["schema"]
+            
+            # FIXED: Changed index slice from [-10] to [-10:] to pull the full list window correctly
+            limited_history = st.session_state.chat_history[-10:] if st.session_state.chat_history else []
             
             # Compile past conversational history strings to supply contextual references for Gemini
             history_context = ""
@@ -112,7 +125,7 @@ if user_question:
                 for chat in limited_history:
                     history_context += f"User: {chat['user']}\nAI Generated SQL: {chat['sql']}\n"
      
-            # 2. Construct dynamic prompt embedding the retrieved db_structure and contextual history
+            # Construct dynamic prompt embedding the retrieved db_structure and contextual history
             prompt = f"""
             You are an expert Data Engineer specializing in Snowflake. Your job is to convert the user's natural language question into a valid Snowflake SQL query.
             
@@ -126,7 +139,7 @@ if user_question:
             2. Do NOT include any conversational text, explanations, intro, or outro.
             3. Always use fully qualified table paths in the query (e.g., {db_name}.{schema_name}.TABLE_NAME) to guarantee execution success.
             4. IMPORTANT FOR FOLLOW-UP QUESTIONS: If the user asks a follow-up question referencing previous data, schema, combine, join, or modify the previous SQL logic if applicable.
-            5. If the user asks to list all data, dump a table, or if the query could potentially return massive rows, you MUST FORCEFULLY APPEND A 'LIMIT 1000' clause at the end of the SQL query. NEVER allow a query to fetch millions of records unfiltered.
+            5. If the user asks to list all data, dump a table, or if the query could potentially return massive rows, you MUST FORCEFULLY APPEND A 'LIMIT {MAX_LIMIT}' clause at the end of the SQL query. NEVER allow a query to fetch millions of records unfiltered.
             
             STRICT ANTI-HALLUCINATION GUARDRAILS:
             6. If the user asks for information, columns, or concepts that DO NOT exist in the provided schema (e.g., SSN, email, etc.), you MUST NOT fake, guess, or map them to unrelated columns (like mapping SSN to ID, or Email to Phone). In this case, strictly return exactly this string: "ERROR: Requested data does not exist in the schema."
@@ -135,17 +148,16 @@ if user_question:
             User Question: {user_question}
             """
             
-            # 3. Request Gemini to generate the executable SQL query
+            # Request Gemini to generate the executable SQL query
             response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
             generated_sql = response.text.strip()
 
-            # Hardcoded python fallback safety check to inject LIMIT if the AI fails to follow instructions
+            # Hardcoded python fallback safety check to inject dynamic LIMIT if the AI fails to follow instructions
             if "LIMIT" not in generated_sql.upper() and "SELECT" in generated_sql.upper():
                 if "COUNT(" not in generated_sql.upper():
-                    generated_sql = generated_sql.rstrip(';') + " LIMIT 1000;"
+                    generated_sql = generated_sql.rstrip(';') + f" LIMIT {MAX_LIMIT};"
             
             # --- ANTI-HALLUCINATION GUARDRAIL CHECK ---
-            # Break pipeline early if conversational text triggers the predefined guardrail error phrase
             if "ERROR: Requested data does not exist in the schema." in generated_sql:
                 st.error("⚠️ Requested data components or concepts do not exist in the database schema.")
                 st.stop()
@@ -154,14 +166,14 @@ if user_question:
             with st.expander("👉 View Generated SQL Code"):
                 st.code(generated_sql, language="sql")
             
-            # 4. Execute the generated SQL statement on Snowflake
+            # Execute the generated SQL statement on Snowflake
             cs = ctx.cursor()
             cs.execute(generated_sql)
             columns = [col[0] for col in cs.description]
             query_results = cs.fetchall()
-            cs.close() # Close cursor session immediately after use
+            cs.close()
             
-            # 5. Render query results on the Streamlit Web Interface
+            # Render query results on the Streamlit Web Interface
             st.success("⚡ Data fetched successfully!")
             if not query_results:
                 st.warning("No records found.")
@@ -195,7 +207,7 @@ if user_question:
         except Exception as e:
             st.error(f"An error occurred: {e}")
     
-    #Print chat history on the screen
+    # Print chat history on the screen
     if st.session_state.chat_history:
         st.markdown("---")
         st.subheader("📜 Conversation History")
