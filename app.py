@@ -19,7 +19,7 @@ def get_ai_client():
 # Establish a connection to the Snowflake database
 @st.cache_resource
 def get_snowflake_connection():
-    ctx = snowflake.connector.connect(
+    return snowflake.connector.connect(
         user=os.getenv('SNOWFLAKE_USER'),
         password=os.getenv('SNOWFLAKE_PASSWORD'),
         account=os.getenv('SNOWFLAKE_ACCOUNT'),
@@ -27,21 +27,54 @@ def get_snowflake_connection():
         database=os.getenv('SNOWFLAKE_DATABASE'),
         schema=os.getenv('SNOWFLAKE_SCHEMA')
     )
-    return ctx
+#cache schema to prevent repetitive disk queries and speed up performance
+@st.cache_data(ttl=3600) 
+def fetch_database_schema():
+    ctx_temp = snowflake.connector.connect(
+        user=os.getenv('SNOWFLAKE_USER'),
+        password=os.getenv('SNOWFLAKE_PASSWORD'),
+        account=os.getenv('SNOWFLAKE_ACCOUNT'),
+        warehouse=os.getenv('SNOWFLAKE_WAREHOUSE'),
+        database=os.getenv('SNOWFLAKE_DATABASE'),
+        schema=os.getenv('SNOWFLAKE_SCHEMA')
+    )
+    cs = ctx_temp.cursor()
+    db_name = os.getenv('SNOWFLAKE_DATABASE')
+    schema_name = os.getenv('SNOWFLAKE_SCHEMA')
+
+    cs.execute(f"""
+        SELECT table_name, column_name 
+        FROM {db_name}.INFORMATION_SCHEMA.COLUMNS 
+        WHERE table_schema = '{schema_name}'
+        ORDER BY table_name, ordinal_position;
+    """)
+    metadata_results = cs.fetchall()
+    cs.close()
+    ctx_temp.close()
+
+    db_structure = ""
+    current_table = ""
+    for row in metadata_results:
+        table_name, column_name = row[0], row[1]
+        if table_name != current_table:
+            db_structure += f"\n- Table '{table_name}' has columns: "
+            current_table = table_name
+        db_structure += f"'{column_name}', "
+    return db_structure
 
 try:
     ai_client = get_ai_client()
     ctx = get_snowflake_connection()
+    #pre-load the schema infor into memory cache
+    db_structure = fetch_database_schema()
 except Exception as e:
     st.error(f"Failed to connect to databases/AI: {e}")
     st.stop()
 
-# --- INITIALIZE CHAT HISTORY IN SESSION STATE ---
 # Streamlit runs linearly on user actions; session_state ensures memory persistence across runs
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# --- WEB UI INTERFACE ---
 st.title("🤖 Snowflake AI Data Agent")
 st.caption("Ask questions in plain English or Vietnamese, and the AI will fetch data dynamically from Snowflake!")
 
